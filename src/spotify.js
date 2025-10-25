@@ -1,10 +1,11 @@
 // src/spotify.js
 const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID; // from .env
-const redirectUri = `${window.location.origin}${import.meta.env.BASE_URL}`; 
+const redirectUri = `${window.location.origin}${import.meta.env.BASE_URL}`;
 const scopes = ['playlist-modify-public','playlist-modify-private','user-read-email'];
 
-let accessToken;
+let accessToken = null;
 
+// --- PKCE helpers ---
 async function sha256(str) {
   const data = new TextEncoder().encode(str);
   return crypto.subtle.digest('SHA-256', data);
@@ -14,6 +15,7 @@ function base64url(buf) {
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/,'');
 }
 
+// --- Auth / Token ---
 async function getAccessToken() {
   if (accessToken) return accessToken;
 
@@ -29,19 +31,27 @@ async function getAccessToken() {
       redirect_uri: redirectUri,
       code_verifier: verifier
     });
+
     const res = await fetch('https://accounts.spotify.com/api/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body
     });
+    if (!res.ok) {
+      console.error('Token exchange failed', await res.text());
+      throw new Error('Spotify token exchange failed');
+    }
     const data = await res.json();
     accessToken = data.access_token;
-    // remove ?code=... from URL
-    window.history.replaceState({}, document.title, redirectUri);
+
+    // Clean the URL (remove ?code=...)
+    const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.hash || ''}`;
+    window.history.replaceState({}, document.title, cleanUrl);
+
     return accessToken;
   }
 
-  // start PKCE auth
+  // Start PKCE auth
   const verifier = base64url(crypto.getRandomValues(new Uint8Array(64)));
   const challenge = base64url(await sha256(verifier));
   localStorage.setItem('spotify_code_verifier', verifier);
@@ -57,40 +67,66 @@ async function getAccessToken() {
 }
 
 export const Spotify = {
+  // --- Search tracks ---
   async search(term) {
     const token = await getAccessToken();
     const res = await fetch(
       `https://api.spotify.com/v1/search?type=track&limit=20&q=${encodeURIComponent(term)}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
+    if (!res.ok) {
+      console.error('Search failed', await res.text());
+      return [];
+    }
     const data = await res.json();
     return (data.tracks?.items ?? []).map(t => ({
       id: t.id,
       name: t.name,
       artist: t.artists.map(a => a.name).join(', '),
       album: t.album.name,
-      uri: `spotify:track:${t.id}`
+      uri: `spotify:track:${t.id}` // IMPORTANT: use URI for saving
     }));
   },
 
-  async savePlaylist(name, uris) {
+  // --- Save playlist (Create → Add) ---
+  async savePlaylist(name, trackUris) {
+    if (!name || !trackUris?.length) return null;
+
     const token = await getAccessToken();
-    const me = await fetch('https://api.spotify.com/v1/me', {
-      headers: { Authorization: `Bearer ${token}` }
-    }).then(r => r.json());
 
-    const playlist = await fetch(`https://api.spotify.com/v1/users/${me.id}/playlists`, {
+    // 1) Create playlist (using /me)
+    const createRes = await fetch('https://api.spotify.com/v1/me/playlists', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, public: false })
-    }).then(r => r.json());
-
-    await fetch(`https://api.spotify.com/v1/playlists/${playlist.id}/tracks`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uris })
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        name,
+        public: false,
+        description: 'Jammming playlist'
+      })
     });
+    if (!createRes.ok) {
+      console.error('Create failed', await createRes.text());
+      throw new Error(`Create failed: ${createRes.status}`);
+    }
+    const { id: playlistId } = await createRes.json();
 
-    return playlist.id;
+    // 2) Add tracks (URIs required)
+    const addRes = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ uris: trackUris })
+    });
+    if (!addRes.ok) {
+      console.error('Add failed', await addRes.text());
+      throw new Error(`Add failed: ${addRes.status}`);
+    }
+
+    return playlistId;
   }
 };
