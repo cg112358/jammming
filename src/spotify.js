@@ -84,7 +84,7 @@ export const Spotify = {
       name: t.name,
       artist: t.artists.map(a => a.name).join(', '),
       album: t.album.name,
-      uri: `spotify:track:${t.id}` // IMPORTANT: use URI for saving
+      uri: `spotify:track:${t.id}` // IMPORTANT
     }));
   },
 
