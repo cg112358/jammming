@@ -50,11 +50,24 @@ export default function App() {
   // ✅ Save playlist to Spotify
   const savePlaylist = async () => {
     if (!playlistTracks.length) return;
-    const uris = playlistTracks.map(t => t.uri);
-    await Spotify.savePlaylist(playlistName || 'New Playlist', uris);
-    setPlaylistName('New Playlist');
-    setPlaylistTracks([]);
+
+    const uris = playlistTracks.map(t => t.uri ?? `spotify:track:${t.id}`);
+    const name = (playlistName || 'New Playlist').trim();
+
+    try {
+      const playlistId = await Spotify.savePlaylist(name, uris);
+      console.log('Saved playlist:', playlistId);
+
+      // optional: keep search results, just clear the draft
+      setPlaylistName('New Playlist');
+      setPlaylistTracks([]);
+      // TODO: show a toast “Saved to Spotify ✓”
+    } catch (err) {
+      console.error('Save failed:', err);
+      // TODO: show a toast “Could not save playlist”
+    }
   };
+
 
   // ✅ Return is now correctly inside App()
   return (
